@@ -250,24 +250,25 @@ quickgo_emt_tcga_comm = np.intersect1d(quickgo_emt_ensemble.index, tcga_adata_co
 
 #%%Cluster SC data and Decompose NKI/AECS dataset
 n_splits = 10
-random_state = 0
+# random_state = 0
 niter = 2
-cmin, cmax = 5, 45
+cmin, cmax = 18, 21
 #all false for aces
 #Patient remove or keep
 remove_non_tumor = True
 remove_lymphnode = False
 remove_chemo_patient = True
 
-datasets = ['NKI', 'ACES', 'TCGA', 'Desmedt', 'VantVeer', 'GSE', 'WANG', 'Vijver', 'YAU']
+datasets = ['NKI',  'GSE', 'ACES', 'TCGA', 'WANG', 'Desmedt', 'VantVeer', 'Vijver', 'YAU']
 
-test_data = datasets[1]
+test_data = datasets[0]
 print(test_data)
 
-models = {"RF" :lambda random_state: RandomForestClassifier(random_state = random_state),
+models = {
+            "RF" :lambda random_state: RandomForestClassifier(random_state = random_state),
         # "LR" : lambda random_state:LogisticRegression(solver='liblinear', random_state=random_state),
         #   "DT" : lambda random_state:DecisionTreeClassifier(random_state=random_state),
-        #   "KNN" : lambda random_state:KNeighborsClassifier(),
+          # "KNN" : lambda random_state:KNeighborsClassifier(),
         # "MLP": lambda random_state:MLPClassifier(random_state=random_state),
         # "SVC" : lambda random_state:svm.SVC(kernel = 'rbf', random_state=random_state, probability=True),
         # "ADB" : lambda random_state:AdaBoostClassifier(random_state=random_state),
@@ -275,7 +276,7 @@ models = {"RF" :lambda random_state: RandomForestClassifier(random_state = rando
     }
 clustering_algorithms = {'Kmeans' : lambda n_clusters: KMeans(n_clusters=n_clusters, random_state=random_state, n_init = 100),
                           # # 'BisectingKMeans' : lambda n_clusters:BisectingKMeans(n_clusters=n_clusters, random_state=random_state),
-                               'Hierarchical' : lambda n_clusters:AgglomerativeClustering(n_clusters=n_clusters, linkage='average'),
+                               # 'Hierarchical' : lambda n_clusters:AgglomerativeClustering(n_clusters=n_clusters, linkage='average'),
                           #  'Birch' : lambda n_clusters:Birch(threshold = 0.5, n_clusters=n_clusters),
                                 # 'Spectral' : lambda n_clusters:SpectralClustering(n_clusters=n_clusters,
                                 #                 assign_labels='discretize',random_state=random_state)
@@ -295,8 +296,9 @@ def get_X_Y(data, Y, ensemble_id, available, entrez = True):
         X = data.loc[:, ensemble_id.loc[available].symbol.values]
     return X, Y.ravel(), available
 
-def do_cluster(sc_X, adata_pam, n_clusters):
-    cluster_alg = clustering_algorithms['Hierarchical'](n_clusters).fit(sc_X)
+def do_cluster(sc_X, adata_pam, cluster_alg_name, n_clusters):
+    
+    cluster_alg = clustering_algorithms[cluster_alg_name](n_clusters).fit(sc_X)
     membership = cluster_alg.labels_
     membership = np.array(['C{:03d}'.format(i) for i in cluster_alg.labels_])
     #keeping the cluster type of each cell inside observations
@@ -337,72 +339,29 @@ elif test_data == 'Vijver':
     
 X = X.to_numpy()
 
+# adata_pam = adata[:, pam_50_genes.index]
 adata_pam = adata[:, available]
 
-# sc_tumor_only = np.intersect1d(adata_pam.obs.single_cell_id, sc_tumor_only_all)
-
-
-combined_sc_clusters = pd.DataFrame()
-if remove_non_tumor:
-    #Keep only five types
-    sc_X =pd.DataFrame(adata_pam.layers['normalized'].todense(), 
-                      index = adata_pam.obs['cell_type_name'], 
-                      columns = adata_pam.var.index)
-    sc_X = sc_X[sc_X.index != 'Tumor']
-    sc_data = do_cluster(sc_X, adata_pam[adata_pam.obs.tumor_status != 'Tumor'], 17)
-    # sc_data = sc_X.groupby(['cell_type_name']).mean()
-    # sc_data = sc_data.iloc[[0, 1, 2, 3], :]
-    # print(sc_data)
-    combined_sc_clusters = combined_sc_clusters.append(sc_data)
-    adata_pam = adata_pam[adata_pam.obs.tumor_status == 'Tumor']
-if remove_chemo_patient:
-    # adata_temp = adata_pam[adata_pam.obs.individual == 'BC05']
-    # sc_X =pd.DataFrame(adata_temp.layers['normalized'].todense(), 
-    #                   index = adata_temp.obs['cell_type_name'], 
-    #                   columns = adata_pam.var.index)
-    # sc_data = sc_X.groupby(['cell_type_name']).mean()
-    # combined_sc_clusters = combined_sc_clusters.append(sc_data)
-    adata_pam = adata_pam[adata_pam.obs.individual != 'BC05']
-   
-if remove_lymphnode:
-    adata_pam = adata_pam[adata_pam.obs.organism_part != 'lymph node']
-
-#Cluster cells into 20 groups using kmeans
-sc_X = adata_pam.layers['normalized'].todense()
 results_all_cluster = {}
 
 for cluster_alg_name, cluster_alg_func in clustering_algorithms.items():
     start_time = datetime.now()
     results_cluster_it = {}
     for n_clusters in range(cmin, cmax, 1):
-        cluster_alg = cluster_alg_func(n_clusters)
-        cluster_alg.fit(sc_X)
-        if cluster_alg_name == 'Birch':
-            membership = cluster_alg.predict(sc_X)
-        else:
-            membership = cluster_alg.labels_
-        
-        n_clusters = len(np.unique(membership))
-        print('\n',test_data, cluster_alg_name, 'n_clusters: ', n_clusters, X.shape,  '\n')
-        
-        membership = np.array(['C{:03d}'.format(i) for i in cluster_alg.labels_])
-        #keeping the cluster type of each cell inside observations
-        adata_pam.obs['cell_cluster_type'] = membership
-        #Encode cells into a size-20 vector of 0 and 1
-        encoded_sc_data = pd.DataFrame(0, index = adata_pam.obs['single_cell_id'],
-                                       columns = np.unique(membership))
-        
-        for cluster_id in encoded_sc_data.columns:
-            row_idx = adata_pam.obs[adata_pam.obs['cell_cluster_type'] == cluster_id].single_cell_id
-            encoded_sc_data.loc[row_idx.values, cluster_id] = 1
-        
-        #decompose NKI/ACES/TCGA data using single cell data
-        sc_data_raw = pd.DataFrame(adata_pam.layers['normalized'].todense(), 
-                          index = adata_pam.obs['cell_cluster_type'], 
-                          columns = adata_pam.var.index)
-        sc_data = sc_data_raw.groupby(['cell_cluster_type']).mean()
+        adata_pam = adata[:, available]
+        combined_sc_clusters = pd.DataFrame()
+        if remove_non_tumor:
+            adata_pam = adata_pam[adata_pam.obs.tumor_status == 'Tumor']
+        if remove_chemo_patient:
+            adata_pam = adata_pam[adata_pam.obs.individual != 'BC05']
+           
+        if remove_lymphnode:
+            adata_pam = adata_pam[adata_pam.obs.organism_part != 'lymph node']
+
+        #Cluster cells into 20 groups using kmeans
+        sc_X = adata_pam.layers['normalized'].todense()
+        sc_data = do_cluster(sc_X, adata_pam, cluster_alg_name, n_clusters)
         sc_data = sc_data.to_numpy().T
-        
         #decomposing bulk dataset using single cell
         decomposed_mat = []
         for i, patient in enumerate(X):
@@ -411,6 +370,7 @@ for cluster_alg_name, cluster_alg_func in clustering_algorithms.items():
             decomposed_mat.append(reg.coef_)
         #converting into numpy array
         decomposed_mat = np.array(decomposed_mat)
+        print(test_data, n_clusters, decomposed_mat.shape)
         results_all = {}
         for model_name, model_func in models.items():
             results_it = {}
@@ -421,17 +381,17 @@ for cluster_alg_name, cluster_alg_func in clustering_algorithms.items():
                 model = model_func(random_state)
                 skf = StratifiedKFold(n_splits=n_splits, random_state=random_state, shuffle=True)
                 
-                # pred_probas = []
-                # y_true, y_pred = [], []
-                # for cv_idx, (train_index, test_index) in enumerate(skf.split(X, Y)):
-                #     data_train, c_train, data_test, c_test = X[train_index], Y[train_index], X[test_index], Y[test_index]
-                #     model.fit(data_train, c_train)
-                #     pred_proba = model.predict_proba(data_test)[:, 1]
-                #     pred_probas.extend(pred_proba)
-                #     y_pred.extend(model.predict(data_test))
-                #     y_true.extend(c_test)
-                # auc, f1, mcc, kappa = performance_metrics(y_true, y_pred, pred_probas)
-                # results_metric.loc[:, 'bulk'] = [auc, f1, mcc, kappa]
+                pred_probas = []
+                y_true, y_pred = [], []
+                for cv_idx, (train_index, test_index) in enumerate(skf.split(X, Y)):
+                    data_train, c_train, data_test, c_test = X[train_index], Y[train_index], X[test_index], Y[test_index]
+                    model.fit(data_train, c_train)
+                    pred_proba = model.predict_proba(data_test)[:, 1]
+                    pred_probas.extend(pred_proba)
+                    y_pred.extend(model.predict(data_test))
+                    y_true.extend(c_test)
+                auc, f1, mcc, kappa = performance_metrics(y_true, y_pred, pred_probas)
+                results_metric.loc[:, 'bulk'] = [auc, f1, mcc, kappa]
                 
                 pred_probas = []
                 y_true, y_pred = [], []
@@ -463,9 +423,251 @@ for cluster_alg_name, cluster_alg_func in clustering_algorithms.items():
 results_all_cluster = pd.concat(results_all_cluster, names = ['clust_name', 'n_cluster', 'model', 'iteration', 'metric'])
 results_all_cluster = results_all_cluster.reorder_levels([2, 0, 4, 1, 3]).sort_index()
 
-#%%Apply clustering and classification
-def do_cluster(sc_X, adata_pam, n_clusters):
-    cluster_alg = clustering_algorithms['Hierarchical'](n_clusters).fit(sc_X)
+#%% Dataset wise classification (NKI, GSE, WANG, TCGA)
+n_splits = 10
+niter = 10
+cmin, cmax = 5, 45
+#all false for aces
+#Patient remove or keep
+remove_non_tumor = True
+remove_lymphnode = False
+remove_chemo_patient = True
+
+models = {
+    "RF" :lambda random_state: RandomForestClassifier(random_state = random_state),
+    }
+clustering_algorithms = {
+    'Bulk' : lambda n_clusters : None,
+    'Kmeans' : lambda n_clusters, random_state : KMeans(n_clusters=n_clusters, random_state=random_state, n_init=1000),
+    'Hierarchical' : lambda n_clusters, random_state : AgglomerativeClustering(n_clusters=n_clusters, linkage='average'),
+    }
+
+def performance_metrics(y_true, y_pred, y_score):
+    auc = roc_auc_score(y_true, y_score)
+    f1 = f1_score(y_true, y_pred)
+    mcc = matthews_corrcoef(y_true, y_pred)
+    kappa = cohen_kappa_score(y_true, y_pred)
+    return auc, f1, mcc, kappa
+
+def get_X_Y(data, Y, ensemble_id, available, entrez = True):
+    if entrez:
+        X = data.loc[:, ensemble_id.loc[available].entrezgene.values]
+    else:
+        X = data.loc[:, ensemble_id.loc[available].symbol.values]
+    return X, Y.ravel(), available
+
+def dataset_picker(test_data):
+    if test_data == 'NKI':
+        X, Y, available = get_X_Y(nki_data, nki_ptype, nki_ensemble, nki_pam_avail, True)
+            
+    elif test_data == 'GSE':
+        X, Y, available = get_X_Y(gse_data, gse_ptype, gse_ensemble, gse_pam_avail, True)
+        
+    elif test_data == 'ACES':
+        X, Y, available = get_X_Y(aces_data, aces_ptype, aces_ensemble, aces_pam_avail, True)
+    
+    elif test_data == 'TCGA':
+        X, Y, available = get_X_Y(tcga_data, tcga_ptype, tcga_ensemble, tcga_pam_avail, False)
+        
+    elif test_data == 'WANG':
+        X, Y, available = get_X_Y(wang_data, wang_ptype, wang_ensemble, wang_pam_avail, True) 
+        
+    elif test_data == 'VantVeer':
+        X, Y, available = get_X_Y(vantveer_data, vantveer_ptype, vantveer_ensemble, vantveer_pam_avail, True)
+    X = X.to_numpy() 
+    return X, Y, available
+
+def do_cluster(sc_X, adata_pam, cluster_alg_name, n_clusters, random_state):
+    
+    cluster_alg = clustering_algorithms[cluster_alg_name](n_clusters, random_state).fit(sc_X)
+    membership = cluster_alg.labels_
+    membership = np.array(['C{:03d}'.format(i) for i in cluster_alg.labels_])
+    #keeping the cluster type of each cell inside observations
+    adata_pam.obs['cell_cluster_type_{0}'.format(n_clusters)] = membership    
+    sc_data_raw = pd.DataFrame(adata_pam.layers['normalized'].todense(), 
+                      index = adata_pam.obs['cell_cluster_type_{0}'.format(n_clusters)], 
+                      columns = adata_pam.var.index)
+    sc_data = sc_data_raw.groupby(['cell_cluster_type_{0}'.format(n_clusters)]).mean()
+    return sc_data
+# dataset_names=['Desmedt', 'Hatzis', 'Ivshina', 'Loi', 'Miller', 'Minn',
+#          'Pawitan', 'Schmidt', 'Symmans', 'WangY', 'WangYE', 'Zhang'] #Study names
+
+# dataset_names = ['NKI',  'GSE', 'ACES', 'TCGA', 'WANG', 'Desmedt', 'VantVeer', 'Vijver', 'YAU']
+
+dataset_names = ['NKI',  'GSE', 'WANG', 'TCGA']
+begin_time = datetime.now()
+results_all_dataset = {}
+for data_idx, dataset_name in enumerate(dataset_names):
+    start_time = datetime.now()
+    X, Y, available = dataset_picker(dataset_name)
+    adata_pam = adata[:, available]
+    if remove_non_tumor:
+        adata_pam = adata_pam[adata_pam.obs.tumor_status == 'Tumor']
+    if remove_chemo_patient:
+        adata_pam = adata_pam[adata_pam.obs.individual != 'BC05']
+    if remove_lymphnode:
+        adata_pam = adata_pam[adata_pam.obs.organism_part != 'lymph node']
+    results_it = {}
+    for iteration in range(niter):#iterating each model n times
+        random_state = iteration
+        skf = StratifiedKFold(n_splits=n_splits, random_state=random_state, shuffle=True)
+        results_model = {}
+        for model_name, model_func in models.items(): #iterating through models
+            model = model_func(random_state)
+            results_all_cluster = {}
+            for cluster_alg_name, cluster_alg_func in clustering_algorithms.items():
+                results_cluster_it = {}
+                results_metric = pd.DataFrame(0, index = ['AUC', 'F1', 'MCC', 'Kappa'], columns = ['score'])
+                if cluster_alg_name == 'Bulk':
+                    n_clusters = 1
+                    pred_probas, y_true, y_pred = [], [], []
+                    for cv_idx, (train_index, test_index) in enumerate(skf.split(X, Y)):
+                        data_train, c_train, data_test, c_test = X[train_index], Y[train_index],\
+                            X[test_index], Y[test_index]
+                        model.fit(data_train, c_train)
+                        pred_proba = model.predict_proba(data_test)[:, 1]
+                        pred_probas.extend(pred_proba)
+                        y_pred.extend(model.predict(data_test))
+                        y_true.extend(c_test)
+                    auc, f1, mcc, kappa = performance_metrics(y_true, y_pred, pred_probas)
+                    results_metric.loc[:, 'score'] = [auc, f1, mcc, kappa]
+                    results_cluster_it[n_clusters] = results_metric
+                else:
+                    sc_X = adata_pam.layers['normalized'].todense()
+                    for n_clusters in range(cmin, cmax, 1):
+                        results_metric = pd.DataFrame(0, index = ['AUC', 'F1', 'MCC', 'Kappa'], columns = ['score'])
+                        sc_data = do_cluster(sc_X, adata_pam, cluster_alg_name, n_clusters, random_state)
+                        sc_data = sc_data.to_numpy().T
+                        
+                        #decomposing bulk dataset using single cell
+                        decomposed_mat = []
+                        for i, patient in enumerate(X):
+                            reg = LinearRegression()
+                            reg.fit(sc_data, patient)
+                            decomposed_mat.append(reg.coef_)
+                        #converting into numpy array
+                        decomposed_mat = np.array(decomposed_mat)
+                        
+                        pred_probas = []
+                        y_true, y_pred = [], []
+                        for cv_idx, (train_index, test_index) in enumerate(skf.split(decomposed_mat, Y)):
+                            data_train, c_train, data_test, c_test = decomposed_mat[train_index], Y[train_index],\
+                                                            decomposed_mat[test_index], Y[test_index]
+                            model.fit(data_train, c_train)
+                            pred_proba = model.predict_proba(data_test)[:, 1]
+                            pred_probas.extend(pred_proba)
+                            y_pred.extend(model.predict(data_test))
+                            y_true.extend(c_test)
+                        
+                        auc, f1, mcc, kappa = performance_metrics(y_true, y_pred, pred_probas)
+                        results_metric.loc[:, 'score'] = [auc, f1, mcc, kappa]
+                        results_cluster_it[n_clusters] = results_metric
+                        
+                results_cluster_it = pd.concat(results_cluster_it)
+                results_all_cluster[cluster_alg_name] = results_cluster_it
+                
+            
+            results_all_cluster = pd.concat(results_all_cluster)
+            results_model[model_name] = results_all_cluster
+            
+        results_model = pd.concat(results_model)
+        results_it[iteration] = results_model
+        print(dataset_names[data_idx], 'iteration', iteration)
+    t = pd.concat(results_it, names = ['iteration', 'classifier', 'cluster_type', 'n_cluster', 'metric'])  
+    t = t.reorder_levels([1, 2, 3, 4, 0]).sort_index()
+    # print( dataset_names[data_idx], t.groupby(level = [0,1,3]).mean().loc[:, :, 'AUC', :])
+    print( dataset_names[data_idx], t.groupby(level = [0,1, 2, 3]).mean().loc['RF', :, :, 'AUC'])
+    results_it = pd.concat(results_it)
+    results_all_dataset[dataset_names[data_idx]] = results_it
+    end_time = datetime.now()
+    print('\nDuration for each dataset: {}'.format(end_time - start_time))
+results_all_dataset = pd.concat(results_all_dataset, names = ['dataset', 'iteration', 'classifier', 
+                                                              'cluster_type', 'n_cluster', 'metric']) 
+results_all_dataset = results_all_dataset.reorder_levels([0, 2, 3, 4, 1, 5]).sort_index()
+print('\nTotal Duration for all dataset: {}'.format(end_time - begin_time))
+#%%plot ACES dataset AUC for different clustering algorithm
+mean_results = results_all_dataset.groupby(level = [0, 1, 2, 3, 5]).mean()
+# fig, ax = plt.subplots(4, 3, figsize = (24, 16), sharex=True, sharey=True)
+# ax = ax.flat
+fig, ax = plt.subplots(2, 1, figsize = (10, 12))
+auc_each_dataset = {}
+for i, name in enumerate(dataset_names):
+    auc_and_index = pd.DataFrame(0, index=clustering_algorithms.keys(), columns = ['n_cluster', 'AUC'])
+    for cluster_name in clustering_algorithms.keys():
+        t1 = mean_results.groupby(['dataset', 'metric', 'cluster_type', 'n_cluster']).max().loc[name, 'AUC', cluster_name].idxmax()
+        t2 = mean_results.groupby(['dataset', 'metric', 'cluster_type', 'n_cluster']).max().loc[name, 'AUC', cluster_name].max()
+        auc_and_index.loc[cluster_name] = [t1.iloc[0], t2.iloc[0]]
+    auc_each_dataset[name] = auc_and_index
+auc_each_dataset = pd.concat(auc_each_dataset, names = ['dataset', 'cluster_type'])
+bar = auc_each_dataset.unstack(level = 1).plot.bar(y = 'AUC', ax = ax[0])
+bar = auc_each_dataset.unstack(level = 1).plot.bar(y = 'n_cluster', ax = ax[1], legend = False)
+ax[0].legend(bbox_to_anchor = [1, 1], loc = 'upper left')
+ax[0].set_ylim([0.3, 0.85])
+plt.ylabel('AUC')
+ax[0].set_title('Best AUC for individual datasets')
+ax[1].set_title('n_cluster for best result')
+plt.subplots_adjust(wspace = 0.05, hspace = 0.3)
+plt.show()
+
+#%%Analysis on hierarchical clustering
+dataset_names = ['NKI',  'GSE',]
+mean_results = results_all_dataset.groupby(level = [0, 1, 2, 3, 5]).mean()
+fig, ax = plt.subplots(1, 2, figsize = (8, 4), sharex = True, sharey = True)
+ax = ax.flat
+cluster_type = 'Hierarchical'
+print('Dataset \t\t total \t\t Good \t\tBad')
+for i, name in enumerate(dataset_names):
+    X, Y, available = dataset_picker(name)
+    bad, good = np.sum(Y), int(X.shape[0]-np.sum(Y))
+    print(name, '\t\t', X.shape[0], '\t\t', good, '\t\t', bad)
+    t2 = mean_results.loc[name, 'RF', cluster_type, :, 'AUC'].plot(ax = ax[i],
+                                            title = '{0}: {1}'.format(name, X.shape[0]),
+                                            marker = '.', legend = False)
+    ax[i].axhline(mean_results.loc[name, 'RF', 'Bulk', :, 'AUC'].values, color = 'r')
+plt.subplots_adjust(wspace = 0.2, hspace = 0.3)
+ax[1].legend(['decomp', 'bulk'], bbox_to_anchor =(1, 1), loc = 'upper left')
+plt.suptitle("AUC with {0} for different k".format(cluster_type))
+plt.show()
+
+#%%Only NKI
+n_splits = 10
+
+niter = 5
+cmin, cmax = 15, 20
+
+remove_non_tumor = True
+remove_lymphnode = False
+remove_chemo_patient = True
+
+datasets = ['NKI']
+
+test_data = datasets[0]
+print(test_data)
+
+models = {
+    "RF" :lambda random_state: RandomForestClassifier(random_state = random_state),
+    }
+clustering_algorithms = {
+    'Kmeans' : lambda n_clusters, random_state: KMeans(n_clusters=n_clusters, random_state=random_state, n_init = 1000),
+    }
+
+def performance_metrics(y_true, y_pred, y_score):
+    auc = roc_auc_score(y_true, y_score)
+    f1 = f1_score(y_true, y_pred)
+    mcc = matthews_corrcoef(y_true, y_pred)
+    kappa = cohen_kappa_score(y_true, y_pred)
+    return auc, f1, mcc, kappa
+
+def get_X_Y(data, Y, ensemble_id, available, entrez = True):
+    if entrez:
+        X = data.loc[:, ensemble_id.loc[available].entrezgene.values]
+    else:
+        X = data.loc[:, ensemble_id.loc[available].symbol.values]
+    return X, Y.ravel(), available
+
+def do_cluster(sc_X, adata_pam, cluster_alg_name, n_clusters, random_state):
+    
+    cluster_alg = clustering_algorithms[cluster_alg_name](n_clusters, random_state).fit(sc_X)
     membership = cluster_alg.labels_
     membership = np.array(['C{:03d}'.format(i) for i in cluster_alg.labels_])
     #keeping the cluster type of each cell inside observations
@@ -476,150 +678,91 @@ def do_cluster(sc_X, adata_pam, n_clusters):
     sc_data = sc_data_raw.groupby(['cell_cluster_type_{0}'.format(n_clusters)]).mean()
     return sc_data
 
-models = {"RF" :lambda random_state: RandomForestClassifier(random_state = random_state)}
-clustering_algorithms = {'Hierarchical' : lambda n_clusters:AgglomerativeClustering(n_clusters=n_clusters)}
 
-def performance_metrics(y_true, y_pred, y_score):
-    auc = roc_auc_score(y_true, y_score)
-    f1 = f1_score(y_true, y_pred)
-    mcc = matthews_corrcoef(y_true, y_pred)
-    kappa = cohen_kappa_score(y_true, y_pred)
-    return auc, f1, mcc, kappa
+if test_data == 'NKI':
+    X, Y, available = get_X_Y(nki_data, nki_ptype, nki_ensemble, nki_pam_avail, True)
 
-n_splits = 10
-random_state = 15
-niter = 5
+X = X.to_numpy()
 
-#Patient remove or keep
-remove_non_tumor = True
-remove_lymphnode = False
-remove_chemo_patient = True
+adata_pam = adata[:, available]
 
-test_data = 'ACES'
-# n_clusters = 19
-clst1, clst2, clst3 = 3, 20, 14
+results_all_cluster = {}
 
-for clst3 in range(5, 30, 1):
-    if test_data == 'NKI':
-        X, Y, available = get_X_Y(nki_data, nki_ptype, nki_ensemble, nki_pam_avail, True)
+for cluster_alg_name, cluster_alg_func in clustering_algorithms.items():
+    start_time = datetime.now()
+    results_cluster_it = {}
+    for n_clusters in range(cmin, cmax, 1):
+        adata_pam = adata[:, available]
+        combined_sc_clusters = pd.DataFrame()
+        if remove_non_tumor:
+            adata_pam = adata_pam[adata_pam.obs.tumor_status == 'Tumor']
+            
+        if remove_chemo_patient:
+            adata_pam = adata_pam[adata_pam.obs.individual != 'BC05']
+           
+        if remove_lymphnode:
+            adata_pam = adata_pam[adata_pam.obs.organism_part != 'lymph node']
+
+        #Cluster cells into 20 groups using kmeans
+        sc_X = adata_pam.layers['normalized'].todense()
+        sc_data = do_cluster(sc_X, adata_pam, cluster_alg_name, n_clusters, random_state)
+        sc_data = sc_data.to_numpy().T
+        #decomposing bulk dataset using single cell
+        decomposed_mat = []
+        for i, patient in enumerate(X):
+            reg = LinearRegression()
+            reg.fit(sc_data, patient)
+            decomposed_mat.append(reg.coef_)
+        #converting into numpy array
+        decomposed_mat = np.array(decomposed_mat)
+        print(test_data, n_clusters, decomposed_mat.shape)
+        results_all = {}
+        for model_name, model_func in models.items():
+            results_it = {}
+            for iteration in range(niter):
+                results_metric = pd.DataFrame(0, index = ['AUC', 'F1', 'MCC', 'Kappa'],
+                                              columns = [ 'bulk', 'decomp'])
+                random_state = iteration
+                model = model_func(random_state)
+                skf = StratifiedKFold(n_splits=n_splits, random_state=random_state, shuffle=True)
+                
+                pred_probas = []
+                y_true, y_pred = [], []
+                for cv_idx, (train_index, test_index) in enumerate(skf.split(X, Y)):
+                    data_train, c_train, data_test, c_test = X[train_index], Y[train_index], X[test_index], Y[test_index]
+                    model.fit(data_train, c_train)
+                    pred_proba = model.predict_proba(data_test)[:, 1]
+                    pred_probas.extend(pred_proba)
+                    y_pred.extend(model.predict(data_test))
+                    y_true.extend(c_test)
+                auc, f1, mcc, kappa = performance_metrics(y_true, y_pred, pred_probas)
+                results_metric.loc[:, 'bulk'] = [auc, f1, mcc, kappa]
+                
+                pred_probas = []
+                y_true, y_pred = [], []
+                
+                for cv_idx, (train_index, test_index) in enumerate(skf.split(decomposed_mat, Y)):
+                    data_train, c_train, data_test, c_test = decomposed_mat[train_index], Y[train_index],\
+                                                    decomposed_mat[test_index], Y[test_index]
+                    model.fit(data_train, c_train)
+                    pred_proba = model.predict_proba(data_test)[:, 1]
+                    pred_probas.extend(pred_proba)
+                    y_pred.extend(model.predict(data_test))
+                    y_true.extend(c_test)
+                auc, f1, mcc, kappa = performance_metrics(y_true, y_pred, pred_probas)
+                results_metric.loc[:, 'decomp'] = [auc, f1, mcc, kappa]
+                results_it[iteration] = results_metric
+            results_it = pd.concat(results_it)
+            results_all[model_name] = results_it
+        t = pd.concat(results_all, names = ['model', 'iteration', 'metric'])  
+        t = t.reorder_levels([0, 2, 1]).sort_index()
+        print( t.groupby(level = [0,1]).mean().loc[:, 'AUC', :])
+        results_all = pd.concat(results_all)
+        results_cluster_it[n_clusters] = results_all
+        end_time = datetime.now()
         
-    elif test_data == 'ACES':
-        X, Y, available = get_X_Y(aces_data, aces_ptype, aces_ensemble, aces_pam_avail, True)
-        
-    elif test_data == 'GSE':
-        X, Y, available = get_X_Y(gse_data, gse_ptype, gse_ensemble, gse_pam_avail, True)
-
-    elif test_data == 'TCGA':
-        X, Y, available = get_X_Y(tcga_data, tcga_ptype, tcga_ensemble, tcga_pam_avail, False)
-            
-    adata_pam = adata[:, pam_50_genes.index]
-    adata_pam = adata[:, aces_pam_avail]
-    
-    combined_sc_clusters = pd.DataFrame()
-     
-
-    if remove_non_tumor:
-        #Keep only five types
-        sc_X =pd.DataFrame(adata_pam.layers['normalized'].todense(), 
-                          index = adata_pam.obs['cell_type_name'], 
-                          columns = adata_pam.var.index)
-        sc_X = sc_X[sc_X.index != 'Tumor']
-        sc_data = do_cluster(sc_X, adata_pam[adata_pam.obs.tumor_status != 'Tumor'], 17)
-        # sc_data = sc_X.groupby(['cell_type_name']).mean()
-        # sc_data = sc_data.iloc[[0, 1, 2, 3], :]
-        # print(sc_data)
-        combined_sc_clusters = combined_sc_clusters.append(sc_data)
-        adata_pam = adata_pam[adata_pam.obs.tumor_status == 'Tumor']
-    if remove_chemo_patient:
-        # adata_temp = adata_pam[adata_pam.obs.individual == 'BC05']
-        # sc_X =pd.DataFrame(adata_temp.layers['normalized'].todense(), 
-        #                   index = adata_temp.obs['cell_type_name'], 
-        #                   columns = adata_pam.var.index)
-        # sc_data = sc_X.groupby(['cell_type_name']).mean()
-        # combined_sc_clusters = combined_sc_clusters.append(sc_data)
-        adata_pam = adata_pam[adata_pam.obs.individual != 'BC05']
-       
-    if remove_lymphnode:
-        adata_pam = adata_pam[adata_pam.obs.organism_part != 'lymph node']
-    
-    sc_X =pd.DataFrame(adata_pam.layers['normalized'].todense(), 
-                      index = adata_pam.obs['organism_part'], 
-                      columns = adata_pam.var.index)
-    # for n_clusters in range(16, 16, 5):
-    sc_data = do_cluster(sc_X, adata_pam, clst3)
-    combined_sc_clusters = combined_sc_clusters.append(sc_data)
-    
-    
-    # print(combined_sc_clusters)
-    
-    combined_sc_clusters = combined_sc_clusters.loc[:, available]
-    
-    combined_sc_clusters = combined_sc_clusters.to_numpy().T
-    
-    X = X.to_numpy()
-    #decomposing bulk dataset using single cell
-    decomposed_mat = []
-    for i, patient in enumerate(X):
-        # reg = linear_model.Lasso(alpha=.01)
-        reg = LinearRegression()
-        # reg = HuberRegressor()
-        reg.fit(combined_sc_clusters, patient)
-        decomposed_mat.append(reg.coef_)
-    #converting into numpy array
-    decomposed_mat = np.array(decomposed_mat)
-    print('done: ', X.shape, clst3, decomposed_mat.shape, adata_pam.shape)
-    
-    results_all = {}
-    for model_name, model_func in models.items():
-        results_it = {}
-        for iteration in range(niter):
-            results_metric = pd.DataFrame(0, index = ['AUC', 'F1', 'MCC', 'Kappa'],
-                                          columns = [ 'bulk', 'decomp'])
-            # results_metric = pd.DataFrame(0, index = ['AUC', 'F1', 'MCC', 'Kappa'],
-            #                               columns = ['bulk', 'decomp', 'sc_train'])
-            random_state = iteration
-            model = model_func(random_state)
-            skf = StratifiedKFold(n_splits=n_splits, random_state=random_state, shuffle=True)
-            
-            # pred_probas = []
-            # y_true, y_pred = [], []
-            # for cv_idx, (train_index, test_index) in enumerate(skf.split(X, Y)):
-            #     data_train, c_train, data_test, c_test = X[train_index], Y[train_index], X[test_index], Y[test_index]
-            #     model.fit(data_train, c_train)
-            #     pred_proba = model.predict_proba(data_test)[:, 1]
-            #     pred_probas.extend(pred_proba)
-            #     y_pred.extend(model.predict(data_test))
-            #     y_true.extend(c_test)
-            # auc, f1, mcc, kappa = performance_metrics(y_true, y_pred, pred_probas)
-            # results_metric.loc[:, 'bulk'] = [auc, f1, mcc, kappa]
-            
-            pred_probas = []
-            y_true, y_pred = [], []
-            
-            for cv_idx, (train_index, test_index) in enumerate(skf.split(decomposed_mat, Y)):
-                data_train, c_train, data_test, c_test = decomposed_mat[train_index], Y[train_index],\
-                                                decomposed_mat[test_index], Y[test_index]
-                model.fit(data_train, c_train)
-                pred_proba = model.predict_proba(data_test)[:, 1]
-                pred_probas.extend(pred_proba)
-                y_pred.extend(model.predict(data_test))
-                y_true.extend(c_test)
-            auc, f1, mcc, kappa = performance_metrics(y_true, y_pred, pred_probas)
-            results_metric.loc[:, 'decomp'] = [auc, f1, mcc, kappa]
-            results_it[iteration] = results_metric
-        results_it = pd.concat(results_it)
-        results_all[model_name] = results_it
-    t = pd.concat(results_all, names = ['model', 'iteration', 'metric'])  
-    t = t.reorder_levels([0, 2, 1]).sort_index()
-    # # print(results_all.groupby(level = [0,1]).mean())
-    print('\n', t.groupby(level = [0,1]).mean().loc[:, 'AUC', :])
-    results_all = pd.concat(results_all)
-    
-    # plt.figure(figsize = (10, 6))
-    # t1 = encoded_sc_data.copy()
-    # t1['patient'] = t1.index.str.split('_').str[0]
-    # t2 = t1.groupby('patient').sum()
-    # # t2 = t2 / t2.sum(axis = 1)[:, None]
-    # sns.heatmap(t2, annot = True)
-    # plt.title('Patients cells in each cluster')
-    # plt.show()
+    results_cluster_it = pd.concat(results_cluster_it)
+    results_all_cluster[cluster_alg_name] = results_cluster_it
+    print('\nDuration for each cluster: {}'.format(end_time - start_time))
+results_all_cluster = pd.concat(results_all_cluster, names = ['clust_name', 'n_cluster', 'model', 'iteration', 'metric'])
+results_all_cluster = results_all_cluster.reorder_levels([2, 0, 4, 1, 3]).sort_index()
