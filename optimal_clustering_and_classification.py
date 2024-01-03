@@ -12,7 +12,7 @@ import numpy as np
 import seaborn as sns
 import anndata
 import scanpy as sc
-from scqcut import scQcut_monolith
+# from scqcut import scQcut_monolith
 import matplotlib.pyplot as plt
 import io
 import csv
@@ -49,7 +49,7 @@ from scipy.stats import zscore
 from sklearn.metrics import matthews_corrcoef
 
 
-import augment
+# import augment
 from imblearn.over_sampling import RandomOverSampler
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.over_sampling import SMOTE
@@ -170,8 +170,9 @@ vantveer_ptype = np.loadtxt('Data/VantVeerData/VantVeer_lables.txt').astype(int)
     
 '''Reading TCGA data'''
 # wang_affymetrix, wang_gene_exp
-tcga_data = pd.read_csv('Data/TCGA_BRCA/TCGA_BRCA_expr.csv', index_col = 0)
-tcga_ptype = np.loadtxt('Data/TCGA_BRCA/TCGA_BRCA_lables.txt').astype(int)
+tcga_data = pd.read_csv('Data/TCGA_BRCA/expr_brca_only.csv', sep = '\t', index_col = 0)
+tcga_survival = pd.read_csv('Data/TCGA_BRCA/survival_brca_only.csv', sep = '\t', index_col = 0)
+tcga_ptype = np.array(tcga_survival.PFI)
 
 '''Reading Desmdt data'''
 # wang_affymetrix, wang_gene_exp
@@ -425,8 +426,8 @@ results_all_cluster = results_all_cluster.reorder_levels([2, 0, 4, 1, 3]).sort_i
 
 #%% Dataset wise classification (NKI, GSE, WANG, TCGA)
 n_splits = 10
-niter = 10
-cmin, cmax = 5, 45
+niter = 20
+cmin, cmax = 5, 51
 #all false for aces
 #Patient remove or keep
 remove_non_tumor = True
@@ -494,7 +495,8 @@ def do_cluster(sc_X, adata_pam, cluster_alg_name, n_clusters, random_state):
 
 # dataset_names = ['NKI',  'GSE', 'ACES', 'TCGA', 'WANG', 'Desmedt', 'VantVeer', 'Vijver', 'YAU']
 
-dataset_names = ['NKI',  'GSE', 'WANG', 'TCGA']
+dataset_names = ['NKI',  'GSE', 'WANG', 'TCGA', 'ACES']
+
 begin_time = datetime.now()
 results_all_dataset = {}
 for data_idx, dataset_name in enumerate(dataset_names):
@@ -591,7 +593,7 @@ mean_results = results_all_dataset.groupby(level = [0, 1, 2, 3, 5]).mean()
 # ax = ax.flat
 fig, ax = plt.subplots(2, 1, figsize = (10, 12))
 auc_each_dataset = {}
-for i, name in enumerate(dataset_names):
+for i, name in enumerate(mean_results.index.get_level_values('dataset').unique()):
     auc_and_index = pd.DataFrame(0, index=clustering_algorithms.keys(), columns = ['n_cluster', 'AUC'])
     for cluster_name in clustering_algorithms.keys():
         t1 = mean_results.groupby(['dataset', 'metric', 'cluster_type', 'n_cluster']).max().loc[name, 'AUC', cluster_name].idxmax()
@@ -610,36 +612,37 @@ plt.subplots_adjust(wspace = 0.05, hspace = 0.3)
 plt.show()
 
 #%%Analysis on hierarchical clustering
-dataset_names = ['NKI',  'GSE',]
+# dataset_names = ['NKI',  'GSE', 'WANG', 'TCGA']
 mean_results = results_all_dataset.groupby(level = [0, 1, 2, 3, 5]).mean()
-fig, ax = plt.subplots(1, 2, figsize = (8, 4), sharex = True, sharey = True)
+fig, ax = plt.subplots(2, 3, figsize = (12, 6), sharex = True, sharey = False)
 ax = ax.flat
-cluster_type = 'Hierarchical'
+cluster_type = 'Kmeans'
+acc_metric = 'AUC'
 print('Dataset \t\t total \t\t Good \t\tBad')
-for i, name in enumerate(dataset_names):
+for i, name in enumerate(mean_results.index.get_level_values('dataset').unique()):
     X, Y, available = dataset_picker(name)
     bad, good = np.sum(Y), int(X.shape[0]-np.sum(Y))
     print(name, '\t\t', X.shape[0], '\t\t', good, '\t\t', bad)
-    t2 = mean_results.loc[name, 'RF', cluster_type, :, 'AUC'].plot(ax = ax[i],
+    t2 = mean_results.loc[name, 'RF', cluster_type, :, acc_metric].plot(ax = ax[i],
                                             title = '{0}: {1}'.format(name, X.shape[0]),
                                             marker = '.', legend = False)
     ax[i].axhline(mean_results.loc[name, 'RF', 'Bulk', :, 'AUC'].values, color = 'r')
 plt.subplots_adjust(wspace = 0.2, hspace = 0.3)
-ax[1].legend(['decomp', 'bulk'], bbox_to_anchor =(1, 1), loc = 'upper left')
-plt.suptitle("AUC with {0} for different k".format(cluster_type))
+ax[-1].legend(['decomp', 'bulk'], bbox_to_anchor =(1, 1), loc = 'upper left')
+plt.suptitle("{0} with {1} clustering for different k".format(acc_metric, cluster_type))
 plt.show()
 
 #%%Only NKI
 n_splits = 10
-
-niter = 5
-cmin, cmax = 15, 20
+random_state = 4
+niter = 10
+cmin, cmax = 14, 40
 
 remove_non_tumor = True
 remove_lymphnode = False
 remove_chemo_patient = True
 
-datasets = ['NKI']
+datasets = ['GSE']
 
 test_data = datasets[0]
 print(test_data)
@@ -648,7 +651,8 @@ models = {
     "RF" :lambda random_state: RandomForestClassifier(random_state = random_state),
     }
 clustering_algorithms = {
-    'Kmeans' : lambda n_clusters, random_state: KMeans(n_clusters=n_clusters, random_state=random_state, n_init = 1000),
+    # 'Kmeans' : lambda n_clusters, random_state: KMeans(n_clusters=n_clusters, random_state = 4, n_init = 1000),
+    'Hierarchical' : lambda n_clusters, random_state : AgglomerativeClustering(n_clusters=n_clusters, linkage='average'),
     }
 
 def performance_metrics(y_true, y_pred, y_score):
@@ -681,7 +685,8 @@ def do_cluster(sc_X, adata_pam, cluster_alg_name, n_clusters, random_state):
 
 if test_data == 'NKI':
     X, Y, available = get_X_Y(nki_data, nki_ptype, nki_ensemble, nki_pam_avail, True)
-
+elif test_data == 'GSE':
+    X, Y, available = get_X_Y(gse_data, gse_ptype, gse_ensemble, gse_pam_avail, True)
 X = X.to_numpy()
 
 adata_pam = adata[:, available]
