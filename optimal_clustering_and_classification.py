@@ -40,6 +40,7 @@ from sklearn import svm
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.ensemble import BaggingClassifier
 from sklearn.svm import SVC
+from xgboost import XGBClassifier
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
@@ -158,9 +159,9 @@ gse_data.columns = gse_entrez_id.reshape(-1)
 
 '''Reading YAU data'''
 # wang_affymetrix, wang_gene_exp
-yau_data = pd.read_csv('Data/YAU_gene_exp.csv', index_col=0)
-yau_ptype = np.loadtxt('Data/YAU_lables.txt').astype(int)
-yau_subtype = np.loadtxt('Data/YAU_subtypes.txt', dtype = str)
+yau_data = pd.read_csv('Data/YAU_Data/YAU_gene_exp.csv', index_col=0)
+yau_ptype = np.loadtxt('Data/YAU_Data/YAU_lables.txt').astype(int)
+yau_subtype = np.loadtxt('Data/YAU_Data/YAU_subtypes.txt', dtype = str)
 
 
 '''Reading vantveer data'''
@@ -193,7 +194,7 @@ nki_ensemble = pd.read_csv('Data/NKI_entrez_to_ensemble.txt', index_col = 0)
 wang_ensemble = pd.read_csv('Data/WangData/wang_entrez_to_ensemble.txt', index_col = 0)
 gse_ensemble = pd.read_csv('Data/GSE_Data/GSE_entrez_to_ensemble.txt', index_col = 0)
 
-yau_ensemble = pd.read_csv('Data/YAU_symbol_to_ensemble.txt', index_col = 0)
+yau_ensemble = pd.read_csv('Data/YAU_Data/YAU_symbol_to_ensemble.txt', index_col = 0)
 vantveer_ensemble = pd.read_csv('Data/VantVeerData/VantVeer_symbol_to_ensemble.txt', index_col = 0)
 # tcga_ensemble = pd.read_csv('Data/TCGA_symbol_to_ensemble.txt', index_col = 0)
 desmedt_ensemble = pd.read_csv('Data/DesmedtData/Desmedt_symbol_to_ensemble.txt', index_col = 0)
@@ -632,23 +633,34 @@ ax[-1].legend(['decomp', 'bulk'], bbox_to_anchor =(1, 1), loc = 'upper left')
 plt.suptitle("{0} with {1} clustering for different k".format(acc_metric, cluster_type))
 plt.show()
 
-#%%Only NKI
+#%%Single dataset evaluation
 n_splits = 10
 random_state = 4
-niter = 10
-cmin, cmax = 14, 40
+niter = 2
+cmin, cmax = 233, 234
 
 remove_non_tumor = True
 remove_lymphnode = False
 remove_chemo_patient = True
 
-datasets = ['GSE']
+datasets = ['ACES']
 
 test_data = datasets[0]
 print(test_data)
 
 models = {
     "RF" :lambda random_state: RandomForestClassifier(random_state = random_state),
+    # "ADB" : lambda random_state:AdaBoostClassifier(random_state=random_state),
+    # "BAGG" :lambda random_state: BaggingClassifier(DecisionTreeClassifier(), n_estimators=10, random_state=random_state)
+    # "xgb" : lambda random_state:XGBClassifier(random_state=random_state),
+    # "LR" : lambda random_state:LogisticRegression(solver='liblinear', random_state=random_state),
+    #   "DT" : lambda random_state:DecisionTreeClassifier(random_state=random_state),
+    #    "KNN" : lambda random_state:KNeighborsClassifier(),
+    # "MLP": lambda random_state:MLPClassifier(random_state=random_state),
+    # "SVC" : lambda random_state:svm.SVC(kernel = 'rbf', random_state=random_state, probability=True),
+    
+    
+    
     }
 clustering_algorithms = {
     # 'Kmeans' : lambda n_clusters, random_state: KMeans(n_clusters=n_clusters, random_state = 4, n_init = 1000),
@@ -687,6 +699,8 @@ if test_data == 'NKI':
     X, Y, available = get_X_Y(nki_data, nki_ptype, nki_ensemble, nki_pam_avail, True)
 elif test_data == 'GSE':
     X, Y, available = get_X_Y(gse_data, gse_ptype, gse_ensemble, gse_pam_avail, True)
+elif test_data == 'ACES':
+    X, Y, available = get_X_Y(aces_data, aces_ptype, aces_ensemble, aces_pam_avail, True)
 X = X.to_numpy()
 
 adata_pam = adata[:, available]
@@ -719,6 +733,7 @@ for cluster_alg_name, cluster_alg_func in clustering_algorithms.items():
             reg.fit(sc_data, patient)
             decomposed_mat.append(reg.coef_)
         #converting into numpy array
+        # decomposed_mat = np.append(X, decomposed_mat, axis = 1)
         decomposed_mat = np.array(decomposed_mat)
         print(test_data, n_clusters, decomposed_mat.shape)
         results_all = {}
@@ -771,3 +786,116 @@ for cluster_alg_name, cluster_alg_func in clustering_algorithms.items():
     print('\nDuration for each cluster: {}'.format(end_time - start_time))
 results_all_cluster = pd.concat(results_all_cluster, names = ['clust_name', 'n_cluster', 'model', 'iteration', 'metric'])
 results_all_cluster = results_all_cluster.reorder_levels([2, 0, 4, 1, 3]).sort_index()
+
+
+
+
+
+#%% Subtype analysis
+SEED = 2024
+n_clusters = 23
+remove_non_tumor = True
+remove_lymphnode = False
+remove_chemo_patient = True
+
+
+test_data = 'ACES'
+if test_data == 'NKI':
+    X, Y, available = get_X_Y(nki_data, nki_ptype, nki_ensemble, nki_pam_avail, True)
+    Y = np.array(nki_subtype)
+elif test_data == 'GSE':
+    X, Y, available = get_X_Y(gse_data, gse_ptype, gse_ensemble, gse_pam_avail, True)
+elif test_data == 'ACES':
+    X, Y, available = get_X_Y(aces_data, aces_ptype, aces_ensemble, aces_pam_avail, True)
+    Y = np.array(aces_subtype)
+X = X.to_numpy()
+
+print("__________________________________________________")
+print("Subtype accuracy for:", test_data, "\tshape:", X.shape)
+print("__________________________________________________")
+print('classifier \t\t\tbulk \t decomposed ')
+print("___________________________________________________")
+
+for model_name, model in models.items():
+    model = model(SEED)
+    skf = StratifiedKFold(n_splits=n_splits, random_state=SEED, shuffle=True)
+    pred_probas1 = []
+    y_true1, y_pred1 = [], []
+    for cv_idx, (train_index, test_index) in enumerate(skf.split(X, Y)):
+        data_train, c_train, data_test, c_test = X[train_index], Y[train_index], X[test_index], Y[test_index]
+        model.fit(data_train, c_train)
+        pred_proba1 = model.predict_proba(data_test)[:, 1]
+        pred_probas1.extend(pred_proba)
+        y_pred1.extend(model.predict(data_test))
+        y_true1.extend(c_test)
+
+    pred_probas2 = []
+    y_true2, y_pred2 = [], []
+    adata_pam = adata[:, available]
+    combined_sc_clusters = pd.DataFrame()
+    if remove_non_tumor:
+        adata_pam = adata_pam[adata_pam.obs.tumor_status == 'Tumor']
+        
+    if remove_chemo_patient:
+        adata_pam = adata_pam[adata_pam.obs.individual != 'BC05']
+       
+    if remove_lymphnode:
+        adata_pam = adata_pam[adata_pam.obs.organism_part != 'lymph node']
+    sc_X = adata_pam.layers['normalized'].todense()
+    sc_data = do_cluster(sc_X, adata_pam, cluster_alg_name, n_clusters, random_state)
+    sc_data = sc_data.to_numpy().T
+    #decomposing bulk dataset using single cell
+    decomposed_mat = []
+    for i, patient in enumerate(X):
+        reg = LinearRegression()
+        reg.fit(sc_data, patient)
+        decomposed_mat.append(reg.coef_)
+    #converting into numpy array
+    # decomposed_mat = np.append(X, decomposed_mat, axis = 1)
+    decomposed_mat = np.array(decomposed_mat)
+    for cv_idx, (train_index, test_index) in enumerate(skf.split(decomposed_mat, Y)):
+        data_train, c_train, data_test, c_test = decomposed_mat[train_index], Y[train_index], decomposed_mat[test_index], Y[test_index]
+        model.fit(data_train, c_train)
+        pred_proba2 = model.predict_proba(data_test)[:, 1]
+        pred_probas2.extend(pred_proba)
+        y_pred2.extend(model.predict(data_test))
+        y_true2.extend(c_test)
+    
+    print('\t', model_name, ' \t\t\t', round(accuracy_score(y_true1, y_pred1, normalize=True), 2), '\t\t',
+          round(accuracy_score(y_true2, y_pred2, normalize=True), 2))
+    
+#%% Dendogram Finding the best K for aggomerative clustering
+
+from scipy.cluster.hierarchy import dendrogram, linkage
+import matplotlib.pyplot as plt
+
+# Perform agglomerative clustering
+linkage_matrix = linkage(adata_pam.layers['normalized'].todense(), method='ward')
+
+# Create a dendrogram
+dendrogram(linkage_matrix)
+
+# Display the dendrogram
+plt.show()
+#%% Silhouette Score Finding the best K for aggomerative clustering
+
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.metrics import silhouette_score
+from sklearn.cluster import KMeans
+max_clusters = 50
+silhouette_scores = []
+cluster_range = range(10, max_clusters + 1)
+
+for n_clusters in cluster_range:
+    # Perform agglomerative clustering
+    model = KMeans(n_clusters=n_clusters, n_init = 1000)
+    labels = model.fit_predict(adata_pam.layers['normalized'].todense())
+
+    # Calculate silhouette score
+    silhouette_avg = silhouette_score(adata_pam.layers['normalized'].todense(), labels)
+    silhouette_scores.append(silhouette_avg)
+plt.plot(cluster_range, silhouette_scores, marker='o')
+plt.xlabel('Number of Clusters')
+plt.ylabel('Silhouette Score')
+plt.title('Silhouette Score for Agglomerative Clustering')
+plt.show()
